@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "boltzlabs"
+version = "0.1.0"
+description = "Thousands of live RL environments behind one batched step call."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "BoltzLabs" }]
+keywords = ["reinforcement-learning", "rl", "sandbox", "gymnasium", "vectorized"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# numpy only. The transport is http.client from the standard library, because a
+# training loop's step is the one call that happens thousands of times and this
+# way the connection reuse, the timeouts and the retry rule are all visible in
+# _http.py rather than inherited from a dependency's defaults.
+dependencies = ["numpy>=1.21"]
+
+[project.optional-dependencies]
+gym = ["gymnasium>=0.29"]
+bench = ["matplotlib>=3.5"]
+dev = ["pytest>=7", "gymnasium>=0.29", "matplotlib>=3.5", "websockets>=12"]
+
+[project.urls]
+Homepage = "https://boltzlabs.cloud"
+
+[tool.hatch.build.targets.wheel]
+packages = ["boltzlabs"]
+
+[tool.hatch.build.targets.sdist]
+include = ["boltzlabs", "examples", "tests", "bench", "README.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

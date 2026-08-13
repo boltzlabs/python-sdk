@@ -1,0 +1,16 @@
+__pycache__/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.venv/
+
+# `make worker` builds the dev worker and its scratch root in here.
+.dev/
+
+# Credentials. BOLTZLABS_API_KEY is a bearer token for the account.
+.env
+
+# Benchmark output is a measurement of one machine at one moment. Publish the
+# numbers you mean to publish; do not let a laptop run drift into the repo.
+bench/results/
