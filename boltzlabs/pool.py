@@ -128,6 +128,7 @@ class RLPool:
         n=None,
         *,
         environment=None,
+        mode="default",
         url=None,
         api_key=None,
         direct=None,
@@ -143,6 +144,9 @@ class RLPool:
         timeout=60.0,
         create_timeout=900.0,
     ):
+        if mode not in ("default", "boltz"):
+            raise ValueError("mode must be 'default' or 'boltz'")
+        self.mode = mode
         # A pool runs either an environment the platform ships or one you wrote.
         # Refused rather than resolved by precedence: the two readings of "whose
         # code ran" are equally plausible, and the wrong one is a training run
@@ -175,7 +179,7 @@ class RLPool:
         self._session = Session(self._base, headers=headers, timeout=timeout)
         self._step_timeout = timeout
 
-        body = {"n": int(n), "serialize_measurement": bool(serialize_measurement)}
+        body = {"n": int(n), "mode": mode, "serialize_measurement": bool(serialize_measurement)}
 
         if environment:
             # A ready-made environment: nothing to pack, and runtime/entrypoint
@@ -314,6 +318,56 @@ class RLPool:
 
         self._reset_timing = Timing.from_wire(res.get("timing"), roundtrip_ms)
         return list(self._obs)
+
+    def snapshot(self):
+        """Save running memory and files; return a snapshot ID owned by this pool."""
+        self._check_open()
+        result, _ = self._session.call(
+            "POST", f"{self._prefix}/{self.pool_id}/snapshot", {}, timeout=900.0
+        )
+        return result["snapshot_id"]
+
+    def restore(self, snapshot_id):
+        """Restore a checkpoint and return its observations without resetting it."""
+        self._check_open()
+        result, _ = self._session.call(
+            "POST", f"{self._prefix}/{self.pool_id}/restore",
+            {"snapshot_id": snapshot_id}, timeout=900.0
+        )
+        observations = result.get("obs", [])
+        if len(observations) != self.n:
+            raise BoltzLabsError("restore returned an unexpected observation count")
+        self._obs = list(observations)
+        self._timing = None
+        self._reset_timing = None
+        return list(self._obs)
+
+    def delete_snapshot(self, snapshot_id):
+        """Release a saved checkpoint. A fork keeps its own independent copy."""
+        self._check_open()
+        self._session.call(
+            "POST", f"{self._prefix}/{self.pool_id}/delete-snapshot",
+            {"snapshot_id": snapshot_id}, timeout=900.0
+        )
+
+    def fork(self, snapshot_id, *, name=None):
+        """Create an independent pool from a snapshot on the same worker."""
+        import copy
+        self._check_open()
+        result, _ = self._session.call(
+            "POST", f"{self._prefix}/{self.pool_id}/fork",
+            {"snapshot_id": snapshot_id, "name": name or ""}, timeout=900.0
+        )
+        child = copy.copy(self)
+        child.pool_id = result["pool_id"]
+        child._session = Session(self._base, headers=self._session.headers, timeout=self._session.timeout)
+        child._obs = list(result.get("obs") or [None] * self.n)
+        child._steps = 0
+        child._timing = None
+        child._reset_timing = None
+        child._created_at = time.time()
+        child._closed = False
+        return child
 
     def step(self, actions):
         """One action per environment, one request, N results.

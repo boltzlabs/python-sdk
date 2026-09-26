@@ -10,15 +10,16 @@
 
     sb.delete()
 
-That is the whole thing: make a machine, use it, destroy it. Three verbs on one
-object, and `delete()` is the one that matters — a sandbox bills for as long as
-it exists. A `with` block writes it for you, including when something raises.
+That is the whole thing: make a machine, use it, pause or destroy it. Active
+compute bills only while it runs; `pause()` preserves the workspace and
+`delete()` ends storage too. A `with` block deletes it for you, including when
+something raises.
 
 `Sandbox()` alone is enough. Every argument is a keyword with a default — name
 only what you are changing:
 
     Sandbox(
-        machine="small",       # nano | small | medium | large
+        machine="small",       # small | medium | large
         environment="base",    # runtimes and prebuilt coding agents
         name=None,             # defaults to the id the platform assigns
         internet=False,
@@ -26,9 +27,9 @@ only what you are changing:
         max_lifetime=None,     # seconds; None leaves the platform default
     )
 
-Everything the `bzlabs` CLI does is here:
+Everything the `boltz` CLI does is here:
 
-| `bzlabs …`             | Python                         |
+| `boltz …`             | Python                         |
 | ---------------------- | ------------------------------ |
 | `create`               | `Sandbox()`                    |
 | `exec <id\|name> <cmd>` | `sb.exec("cmd")`              |
@@ -69,20 +70,18 @@ ENVIRONMENTS = (
     "base",
     "python",
     "node",
-    "pytorch",
     "opencode",
     "claude-code",
     "codex",
     "deepagents",
-    "aider",
 )
 
 # The machines it offers, cheapest first.
-MACHINES = ("nano", "small", "medium", "large")
+MACHINES = ("small", "medium", "large")
 
 # What `run` sends when the caller does not say. The environment is what the
 # sandbox ships with, so it already answers the question.
-_LANGUAGE_FOR = {"python": "python", "pytorch": "python", "node": "node", "base": "bash"}
+_LANGUAGE_FOR = {"python": "python", "node": "node", "base": "bash"}
 
 
 class ExecResult:
@@ -178,7 +177,7 @@ class Environment:
 
 
 class Machine:
-    """A machine: nano, small, medium, large — and what it costs."""
+    """A machine: small, medium, or large — and what it costs."""
 
     __slots__ = ("name", "vcpus", "memory_mb", "disk_gb", "rate_usd_per_hour")
 
@@ -200,24 +199,89 @@ class Machine:
 
 
 class Language:
-    """A language code execution accepts: python, node, go, c, cpp.
+    """A language the exec plane runs. ``id`` is the ``language_id`` a
+    submission sends; ``code`` (python, node, go, c, cpp) works in its place.
 
     ``compiled`` is the one difference you can see from out here: those runs
-    build first, so part of the time belongs to the compiler and code that does
-    not compile comes back with the compiler's message rather than a traceback.
+    build first, and code that does not compile comes back as a Compilation
+    Error with the compiler's message rather than a traceback.
     """
 
-    __slots__ = ("code", "label", "extension", "compiled")
+    __slots__ = ("id", "name", "code", "extension", "compiled")
 
-    def __init__(self, code, label="", extension="", compiled=False):
-        self.code, self.label, self.extension = code, label, extension
-        self.compiled = compiled
+    def __init__(self, id=0, name="", code="", extension="", compiled=False):
+        self.id, self.name, self.code = id, name, code
+        self.extension, self.compiled = extension, compiled
+
+    @property
+    def label(self):
+        return self.name
 
     def __str__(self):
         return self.code
 
     def __repr__(self):
-        return f"<Language {self.code} ({self.label})>"
+        return f"<Language {self.id} {self.code} ({self.name})>"
+
+
+class Submission:
+    """One run on the exec plane, in the standard submission format.
+
+    ``res.json`` is the response exactly as it came back; its fields are
+    attributes too — ``stdout``, ``stderr``, ``compile_output``, ``message``,
+    ``status`` ({"id", "description"}), ``time`` and ``wall_time`` (seconds, as
+    strings), ``memory`` (KB), ``exit_code``, ``token``. ``str(res)`` is what it
+    printed and ``bool(res)`` is whether it was Accepted::
+
+        res = boltzlabs.execute("print(int(input()) * 2)", language="python",
+                                stdin="21", expected_output="42", cpu_time_limit=1)
+        res.status        # {"id": 3, "description": "Accepted"}
+        res.time, res.memory
+    """
+
+    FIELDS = (
+        "token", "stdout", "stderr", "compile_output", "message", "status",
+        "time", "wall_time", "memory", "exit_code", "exit_signal", "language_id",
+    )
+
+    def __init__(self, data=None):
+        self.json = dict(data or {})
+        for field in self.FIELDS:
+            setattr(self, field, self.json.get(field))
+
+    @property
+    def status_id(self):
+        return (self.status or {}).get("id")
+
+    @property
+    def finished(self):
+        """False while it is still In Queue or Processing."""
+        return self.status_id not in (1, 2)
+
+    @property
+    def accepted(self):
+        return self.status_id == 3
+
+    def __bool__(self):
+        return self.accepted
+
+    def __str__(self):
+        out = self.stdout or ""
+        if not self.accepted:
+            out += (self.compile_output or "") if self.status_id == 6 else (self.stderr or "")
+        return out
+
+    def __repr__(self):
+        desc = (self.status or {}).get("description", "?")
+        return f"<Submission {desc} time={self.time} memory={self.memory} {(self.stdout or '')[:40]!r}>"
+
+    def check(self):
+        """Raise unless it was Accepted. For a script that should stop here."""
+        if not self.accepted:
+            detail = (self.compile_output or self.stderr or self.message or "").strip()[:500]
+            desc = (self.status or {}).get("description", "not finished")
+            raise BoltzLabsError(f"run ended {desc}" + (f": {detail}" if detail else ""))
+        return self
 
 
 class APIKey:
@@ -237,23 +301,42 @@ class APIKey:
 
 
 class Sandbox:
-    """A sandbox. Constructing one creates it.
+    """A Linux workspace with an explicit create/run/delete lifecycle.
 
-        sb = Sandbox()                              # small / base
-        sb = Sandbox(environment="python")          # pick what it ships with
-        sb = Sandbox(machine="medium", environment="pytorch", name="trainer")
+        sandbox = Sandbox.create(environment="python")
+        result = sandbox.run("print(1 + 1)")
+        print(result)
+        sandbox.delete()
 
-        sb.delete()                                 # stops the meter
-
-    Every argument is a keyword, so the call names what it means and you only
-    write the ones you are changing. To reach a sandbox that already exists, use
-    ``boltzlabs.sandbox(id)`` — an id is assigned by the platform, never chosen by
-    the caller, so it is not something you pass to a constructor that creates.
-
-    A ``with`` block is the same thing with the ``delete()`` written for you,
-    including when the body raises — which is the case that otherwise leaves a
-    machine billing until someone notices.
+    Use ``with Sandbox.create(...) as sandbox`` for automatic cleanup,
+    including when code raises. ``Sandbox(...)`` remains supported.
+    Retrieve an existing workspace with ``boltzlabs.sandbox(id)``.
     """
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        machine=DEFAULT_MACHINE,
+        environment=DEFAULT_ENVIRONMENT,
+        name=None,
+        internet=None,
+        idle_timeout=None,
+        max_lifetime=None,
+        client=None,
+        timeout=300.0,
+    ):
+        """Create a workspace. Call delete() when you no longer need it."""
+        return cls(
+            machine=machine,
+            environment=environment,
+            name=name,
+            internet=internet,
+            idle_timeout=idle_timeout,
+            max_lifetime=max_lifetime,
+            client=client,
+            timeout=timeout,
+        )
 
     def __init__(
         self,
@@ -284,7 +367,7 @@ class Sandbox:
     # -- the three verbs -----------------------------------------------------
 
     def exec(self, command, timeout=None):
-        """Run one shell command. `bzlabs exec <id> <cmd…>`."""
+        """Run one shell command. `boltz exec <id> <cmd…>`."""
         body = {"command": command}
         if timeout:
             body["timeoutS"] = int(timeout)
@@ -302,7 +385,7 @@ class Sandbox:
         )
 
     def terminal(self, script=None, timeout=60.0, **kw):
-        """A real shell. `bzlabs connect <id>`.
+        """A real shell. `boltz connect <id>`.
 
         With no arguments it hands over your keyboard until you exit. With a
         ``script`` it runs that instead and returns the transcript — the same
@@ -314,10 +397,48 @@ class Sandbox:
             return _terminal.attach(self._client, self.id, **kw)
         return _terminal.run_script(self._client, self.id, script, timeout=timeout, **kw)
 
+    # -- files ---------------------------------------------------------------
+
+    def push(self, local, remote="/workspace", timeout=300.0):
+        """Copy a local file or directory into the sandbox. `boltz cp <src> <id>:<dst>`.
+
+        Uploading ``./src`` lands it as ``<remote>/src``, the way scp does.
+        """
+        from . import _files
+
+        return _files.push(self._client, self.id, local, remote, timeout=timeout)
+
+    def pull(self, remote, local=".", timeout=300.0):
+        """Copy a path out of the sandbox. `boltz cp <id>:<src> <dst>`."""
+        from . import _files
+
+        return _files.pull(self._client, self.id, remote, local, timeout=timeout)
+
     # -- the rest ------------------------------------------------------------
 
+    def pause(self):
+        """Stop compute and preserve files. Paused storage is free for 3 days.
+
+        Files under /workspace are archived to object storage shortly after,
+        which is what lets a paused sandbox cost nothing and come back on a
+        different machine. Packages installed outside /workspace do not survive
+        that; your files do.
+        """
+        self._fill(self._client._post(f"/api/sandboxes/{self.id}/pause"))
+        return self
+
+    def resume(self, timeout=300.0):
+        """Restart a paused sandbox after capacity and credit checks.
+
+        Seconds if the sandbox is still on its machine, longer if it has to be
+        rebuilt from its archived workspace — hence its own deadline rather than
+        the client-wide one.
+        """
+        self._fill(self._client._post(f"/api/sandboxes/{self.id}/resume", timeout=timeout))
+        return self
+
     def delete(self):
-        """Destroy it. `bzlabs rm <id>`."""
+        """Destroy it. `boltz rm <id>`."""
         self._client._delete(f"/api/sandboxes/{self.id}")
         return True
 
@@ -427,79 +548,137 @@ class Client:
 
     # -- what you actually call ---------------------------------------------
 
-    def execute(self, code=None, *, language=None, file=None, timeout=None, filename=None):
-        """Run one piece of code and get back what it printed. `bzlabs run`.
+    def execute(
+        self,
+        code=None,
+        *,
+        language=None,
+        file=None,
+        stdin=None,
+        expected_output=None,
+        cpu_time_limit=None,
+        wall_time_limit=None,
+        memory_limit=None,
+        supersede_key=None,
+        wait=True,
+    ):
+        """Run one piece of code on the exec plane. `boltz run`.
 
         Either the code itself or a path to read it from, and always the
-        language::
+        language — an id (113) or a code ("python")::
 
             boltzlabs.execute("print(sum(range(101)))", language="python")
-            boltzlabs.execute(file="train.py", language="python")
             boltzlabs.execute(file="main.go", language="go")
 
-        The language is never guessed, from an extension or otherwise: a ``.py``
-        file is as likely to be torch as plain python, and inline code has no
-        extension at all. See ``boltzlabs.languages()`` for the codes.
+        Judging a solution: the test input, the problem's limits (seconds, and
+        KB for memory — they only ever lower the platform's own) and the
+        expected answer::
 
-        A compiled language (go, c, cpp) is built first and then run. Code that
-        does not compile comes back as a result, not an exception, with
-        ``compile_failed`` set and the compiler's output in ``stderr``.
+            res = boltzlabs.execute(file="sol.py", language="python", stdin="3\n1 2 3\n",
+                                    expected_output="6", cpu_time_limit=1, memory_limit=65536)
+            res.status   # {"id": 3, "description": "Accepted"}, Wrong Answer, Time Limit Exceeded, ...
 
-        Nothing is created and nothing is left over — no sandbox to make first
-        and none to destroy after. Use a :class:`Sandbox` instead when you want
-        state to survive between commands.
+        Returns a :class:`Submission`. ``wait=False`` returns at once with just
+        its ``token``; :meth:`submission` fetches it later. ``supersede_key``: a
+        newer run with the same key replaces this one (an editor's Run pressed
+        again). Nothing is created and nothing is left over — use a
+        :class:`Sandbox` when you want state to survive between commands.
         """
         if (code is None) == (file is None):
             raise ValueError("pass either code or file, not both and not neither")
-        if not language:
+        if language is None or language == "":
             raise ValueError(
                 "language is required — it is never inferred. "
-                "See boltzlabs.languages() for the codes."
+                "See boltzlabs.languages() for the ids and codes."
             )
         if file is not None:
             # The path is resolved here, on the caller's machine: the platform
             # never sees a path it would have to trust or resolve.
-            path = _Path(file)
-            code = path.read_text()
-            filename = filename or path.name
-
-        body = {"code": code, "language": language}
-        if filename:
-            body["filename"] = filename
-        if timeout:
-            body["timeoutS"] = int(timeout)
-        return ExecResult._from_wire(
-            self._post("/api/execute", body, timeout=_wait(timeout or 30))
+            code = _Path(file).read_text()
+        body = self._submission(
+            code, language, stdin=stdin, expected_output=expected_output,
+            cpu_time_limit=cpu_time_limit, wall_time_limit=wall_time_limit,
+            memory_limit=memory_limit, supersede_key=supersede_key,
         )
+        path = "/api/execute?wait=true&fields=*" if wait else "/api/execute"
+        return Submission(self._post(path, body, timeout=180))
+
+    def execute_batch(self, submissions, *, wait=True, poll_interval=0.25, timeout=300.0):
+        """Run up to 20 submissions at once — the test cases of one problem,
+        say. Each is a dict of :meth:`execute`'s keywords (``code`` or
+        ``source_code``, ``language``, ``stdin``, ``expected_output``, limits).
+        Returns their :class:`Submission` results, in order, once all finish."""
+        items = []
+        for item in submissions:
+            item = dict(item)
+            code = item.pop("code", None) or item.pop("source_code", None)
+            language = item.pop("language", None) or item.pop("language_id", None)
+            items.append(self._submission(code, language, **item))
+        answer = self._post("/api/execute/batch", {"submissions": items})
+        bad = [(i, a) for i, a in enumerate(answer) if "token" not in a]
+        if bad:
+            raise BoltzLabsError(f"invalid submissions in batch: {bad}")
+        tokens = [a["token"] for a in answer]
+        if not wait:
+            return [Submission({"token": t, "status": {"id": 1, "description": "In Queue"}}) for t in tokens]
+        deadline = time.monotonic() + timeout
+        while True:
+            got = self._get("/api/execute/batch?fields=*&tokens=" + ",".join(tokens))["submissions"]
+            results = [Submission(g) for g in got]
+            if all(r.finished for r in results):
+                return results
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"batch still unfinished after {timeout}s")
+            time.sleep(poll_interval)
+
+    def submission(self, token):
+        """A submission by token, as it is now."""
+        return Submission(self._get(f"/api/execute/{token}?fields=*"))
+
+    def _submission(self, code, language, **fields):
+        body = {"source_code": code, "language_id": self._language_id(language)}
+        body.update({k: v for k, v in fields.items() if v is not None})
+        return body
+
+    def _language_id(self, language):
+        if isinstance(language, int) or str(language).isdigit():
+            return int(language)
+        ids = getattr(self, "_language_ids", None)
+        if ids is None:
+            ids = {l.code: l.id for l in self.languages()}
+            self._language_ids = ids
+        if language not in ids:
+            raise ValueError(f"unknown language {language!r}: one of {sorted(ids)} or an id")
+        return ids[language]
 
     def languages(self):
-        """The language codes execution accepts. `bzlabs languages`."""
-        body = self._get("/api/languages")
+        """The language codes execution accepts. `boltz languages`."""
         return [
             Language(
+                int(l.get("id") or 0),
+                l.get("name") or "",
                 l.get("code") or "",
-                l.get("label") or "",
                 l.get("extension") or "",
                 bool(l.get("compiled")),
             )
-            for l in (body or {}).get("languages") or []
+            for l in self._get("/api/languages") or []
         ]
 
     def create_sandbox(self, **kw):
-        """Create a sandbox on this client. Same as ``Sandbox(...)``."""
-        return Sandbox(client=self, **kw)
+        """Create a sandbox on this client. Same as ``Sandbox.create(...)``."""
+        return Sandbox.create(client=self, **kw)
 
     def sandbox(self, id):
-        """One sandbox by id, as it is now. `bzlabs status <id>`."""
+        """One sandbox by id, as it is now. `boltz status <id>`."""
         return Sandbox._attach(self._get(f"/api/sandboxes/{id}"), self)
 
     def sandboxes(self):
-        """Every sandbox this key can see. `bzlabs ls`."""
+        """Every sandbox this key can see. `boltz ls`."""
         body = self._get("/api/sandboxes")
         return [Sandbox._attach(s, self) for s in (body or {}).get("sandboxes") or []]
 
     def environments(self):
-        """What a sandbox can ship with. `bzlabs environments`."""
+        """What a sandbox can ship with. `boltz environments`."""
         body = self._get("/api/environments")
         return [
             Environment(e.get("name") or "", bool(e.get("default")))
@@ -507,7 +686,7 @@ class Client:
         ]
 
     def machines(self):
-        """Machines and prices. `bzlabs machines`."""
+        """Machines and prices. `boltz machines`."""
         body = self._get("/api/machines")
         return [
             Machine(
@@ -521,7 +700,7 @@ class Client:
         ]
 
     def me(self):
-        """Who this key belongs to. `bzlabs auth status`."""
+        """Who this key belongs to. `boltz auth status`."""
         return self._get("/api/me")
 
     # -- api keys ------------------------------------------------------------

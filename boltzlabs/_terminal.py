@@ -1,4 +1,4 @@
-"""`bzlabs connect`, as Python: an interactive shell on a sandbox.
+"""`boltz connect`, as Python: an interactive shell on a sandbox.
 
 Two entry points over the same WebSocket:
 
@@ -49,7 +49,7 @@ def attach(client, sandbox_id, stdin=None, stdout=None, raw=None):
     """Bridge the local terminal to the sandbox's shell until either end closes.
 
     Returns when the remote closes (`exit`, Ctrl-D) — the same contract as
-    `bzlabs connect`.
+    `boltz connect`.
     """
     stdin = stdin if stdin is not None else sys.stdin
     stdout = stdout if stdout is not None else sys.stdout

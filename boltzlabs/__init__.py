@@ -30,6 +30,7 @@ from .client import (
     Client,
     Environment,
     ExecResult,
+    Submission,
     Language,
     Machine,
     Sandbox,
@@ -46,6 +47,7 @@ from .errors import (
     PayloadTooLargeError,
     PoolGoneError,
     QuotaError,
+    SupersededError,
     TransportError,
 )
 from .pool import RLPool, Timing
@@ -60,12 +62,14 @@ __all__ = [
     "use",
     "me",
     "execute",
+    "execute_batch",
     "sandbox",
     "sandboxes",
     "environments",
     "machines",
     "languages",
     "ExecResult",
+    "Submission",
     "Environment",
     "Machine",
     "Language",
@@ -78,6 +82,7 @@ __all__ = [
     "AuthError",
     "NotFoundError",
     "QuotaError",
+    "SupersededError",
     "CapacityError",
     "PoolGoneError",
     "PayloadTooLargeError",
@@ -90,35 +95,39 @@ __all__ = [
 # no socket. `_default_client()` is called inside each rather than held in a
 # module attribute, because `boltzlabs.client` is already the submodule.
 def me():
-    """Who your key belongs to. `bzlabs auth status`."""
+    """Who your key belongs to. `boltz auth status`."""
     return _default_client().me()
 
 
 def sandboxes():
-    """Your sandboxes. `bzlabs ls`."""
+    """Your sandboxes. `boltz ls`."""
     return _default_client().sandboxes()
 
 
-def execute(code=None, *, language=None, file=None, timeout=None, filename=None):
-    """Run one piece of code and get back what it printed. `bzlabs run`.
+def execute(code=None, **kw):
+    """Run one piece of code on the exec plane. `boltz run`.
 
         boltzlabs.execute("print(sum(range(101)))", language="python")
-        boltzlabs.execute(file="train.py", language="python")
+        boltzlabs.execute(file="sol.py", language=113, stdin="21", expected_output="42")
 
-    The language is always named — see ``boltzlabs.languages()`` for the codes.
+    The language is always named — an id or a code; see ``boltzlabs.languages()``.
+    Returns a :class:`Submission`; see :meth:`Client.execute` for every option.
     """
-    return _default_client().execute(
-        code, language=language, file=file, timeout=timeout, filename=filename
-    )
+    return _default_client().execute(code, **kw)
+
+
+def execute_batch(submissions, **kw):
+    """Run up to 20 submissions at once; see :meth:`Client.execute_batch`."""
+    return _default_client().execute_batch(submissions, **kw)
 
 
 def languages():
-    """The language codes execution accepts. `bzlabs languages`."""
+    """The language codes execution accepts. `boltz languages`."""
     return _default_client().languages()
 
 
 def sandbox(id):
-    """One sandbox by id. `bzlabs status <id>`.
+    """One sandbox by id. `boltz status <id>`.
 
     The counterpart to constructing one: ``Sandbox(...)`` creates, this reaches
     something the platform already assigned an id to.
@@ -127,12 +136,12 @@ def sandbox(id):
 
 
 def environments():
-    """What a sandbox can ship with. `bzlabs environments`."""
+    """What a sandbox can ship with. `boltz environments`."""
     return _default_client().environments()
 
 
 def machines():
-    """Machines and prices. `bzlabs machines`."""
+    """Machines and prices. `boltz machines`."""
     return _default_client().machines()
 
 

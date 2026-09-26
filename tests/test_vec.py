@@ -39,7 +39,7 @@ def env_dir(tmp_path):
 
 
 def make_vec(worker, env_dir, n=4, **kw):
-    pool = RLPool(env_dir=env_dir, n=n, direct=worker["url"], worker_token=worker["token"])
+    pool = RLPool(mode="boltz", env_dir=env_dir, n=n, direct=worker["url"], worker_token=worker["token"])
     return BoltzLabsVecEnv(pool, **kw)
 
 
@@ -87,7 +87,7 @@ def test_close_closes_the_pool(worker, env_dir):
 
 
 def test_close_pool_false_leaves_it_open(worker, env_dir):
-    pool = RLPool(env_dir=env_dir, n=2, direct=worker["url"], worker_token=worker["token"])
+    pool = RLPool(mode="boltz", env_dir=env_dir, n=2, direct=worker["url"], worker_token=worker["token"])
     vec = BoltzLabsVecEnv(pool, close_pool=False)
     vec.close()
     assert not pool.closed

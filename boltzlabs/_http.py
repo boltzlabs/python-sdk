@@ -148,6 +148,62 @@ class Session:
 
                 return resp.status, _decode(raw), elapsed_ms
 
+    def raw(self, method, path, payload=None, content_type=None, timeout=None):
+        """A request whose body and response are bytes rather than JSON.
+
+        File transfer moves tar streams, which have no business being decoded
+        as JSON in either direction. Everything else — the connection reuse, the
+        retry on a stale socket, the error mapping — is shared with ``call``.
+
+        Returns the response body as ``bytes``.
+        """
+        headers = dict(self.headers)
+        if payload is not None:
+            headers["Content-Type"] = content_type or "application/octet-stream"
+            headers["Content-Length"] = str(len(payload))
+        timeout = timeout or self.timeout
+
+        with self._lock:
+            for attempt in (0, 1):
+                reused = self._conn is not None
+                if not reused:
+                    try:
+                        self._conn = self._connect(timeout)
+                    except (OSError, http.client.HTTPException) as exc:
+                        self._conn = None
+                        raise TransportError(f"cannot reach {self.origin}: {exc}") from exc
+                else:
+                    try:
+                        self._conn.sock.settimeout(timeout)
+                    except (AttributeError, OSError):
+                        pass
+                try:
+                    self._conn.request(method, self.prefix + path, body=payload, headers=headers)
+                    resp = self._conn.getresponse()
+                    raw = resp.read()
+                except (OSError, http.client.HTTPException) as exc:
+                    try:
+                        self._conn.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._conn = None
+                    if reused and attempt == 0:
+                        continue
+                    raise TransportError(f"{method} {path} failed: {exc}") from exc
+
+                if resp.will_close:
+                    try:
+                        self._conn.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._conn = None
+
+                if resp.status >= 400:
+                    # An error body is JSON even when the success body is not.
+                    decoded = _decode(raw)
+                    raise from_status(resp.status, _message(decoded, resp.status), decoded)
+                return raw
+
     def call(self, method, path, body=None, timeout=None):
         """``request`` plus the error mapping. Returns ``(body, elapsed_ms)``."""
         status, decoded, elapsed_ms = self.request(method, path, body, timeout)

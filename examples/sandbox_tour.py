@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Everything `bzlabs` does at the command line, done from Python.
+"""Everything `boltz` does at the command line, done from Python.
 
     export BOLTZLABS_API_KEY=ak_...      # or put it in a .env next to this file
     python examples/sandbox_tour.py
@@ -19,7 +19,7 @@ def main():
     ap.add_argument("--url", help="override the origin (default: production)")
     ap.add_argument("--api-key", help="override the key (default: env or .env)")
     ap.add_argument("--environment", default="python", help="runtime or coding-agent image")
-    ap.add_argument("--machine", default="small", help="nano, small, medium, large")
+    ap.add_argument("--machine", default="small", help="small, medium, large")
     args = ap.parse_args()
 
     if args.url or args.api_key:
@@ -44,7 +44,7 @@ def main():
         print("\nrun")
         print("  " + str(sb.run("print(sum(range(101)))")).strip())
 
-        print("\nterminal (a real PTY, like `bzlabs connect`)")
+        print("\nterminal (a real PTY, like `boltz connect`)")
         print("  " + sb.terminal("tty; echo from-a-real-tty").strip().replace("\n", "\n  ")[:400])
 
         print(f"\nport 8080 is at {sb.url(8080)}")

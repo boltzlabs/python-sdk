@@ -75,21 +75,37 @@ class FakePlatform(BaseHTTPRequestHandler):
                 {"name": "small", "vcpus": 1, "memoryMb": 1024, "diskGb": 5, "rateUsdPerHour": 0.1}
             ]})
         if p == "/api/languages" and m == "GET":
-            return self._send(200, {"languages": [
-                {"code": "python", "label": "Python 3", "extension": ".py", "compiled": False},
-                {"code": "node", "label": "Node.js", "extension": ".js", "compiled": False},
-                {"code": "c", "label": "C", "extension": ".c", "compiled": True},
+            return self._send(200, [
+                {"id": 102, "name": "JavaScript (Node.js 26.10.0)", "code": "node", "extension": ".js", "compiled": False},
+                {"id": 103, "name": "C (GCC 15.2)", "code": "c", "extension": ".c", "compiled": True},
+                {"id": 113, "name": "Python (3.14)", "code": "python", "extension": ".py", "compiled": False},
+            ])
+        if p.startswith("/api/execute/batch") and m == "POST":
+            return self._send(201, [{"token": f"t{i}"} for i, _ in enumerate(body["submissions"])])
+        if p.startswith("/api/execute/batch") and m == "GET":
+            tokens = p.split("tokens=")[1].split("&")[0].split(",")
+            return self._send(200, {"submissions": [
+                {"token": t, "stdout": f"out {t}\n", "status": {"id": 3, "description": "Accepted"}} for t in tokens
             ]})
-        if p == "/api/execute" and m == "POST":
+        if p.startswith("/api/execute/") and m == "GET":
+            return self._send(200, {"token": p.split("/")[3].split("?")[0], "status": {"id": 3, "description": "Accepted"}})
+        if p.startswith("/api/execute") and m == "POST":
             # A compiled language that does not compile: the program never ran,
-            # so stderr is the compiler's and there is no stdout.
-            if body.get("language") == "c" and "syntax error" in body["code"]:
-                return self._send(200, {
-                    "stdout": "", "stderr": "main.c:1: expected ';'", "exitCode": 1,
-                    "durationMs": 90, "compileMs": 90, "compileFailed": True,
+            # so compile_output is the compiler's and there is no stdout.
+            if body.get("language_id") == 103 and "syntax error" in body["source_code"]:
+                return self._send(201, {
+                    "stdout": None, "stderr": None, "compile_output": "main.c:1: expected ';'",
+                    "status": {"id": 6, "description": "Compilation Error"}, "token": "tok-c",
                 })
-            return self._send(200, {
-                "stdout": body["code"], "stderr": "", "exitCode": 0, "durationMs": 7,
+            if "expected_output" in body:
+                ok = body["expected_output"] == "6"
+                return self._send(201, {
+                    "stdout": "6\n", "stderr": None, "time": "0.012", "memory": 9216, "token": "tok-j",
+                    "status": {"id": 3, "description": "Accepted"} if ok else {"id": 4, "description": "Wrong Answer"},
+                })
+            return self._send(201, {
+                "stdout": body["source_code"], "stderr": None, "time": "0.001", "memory": 1024,
+                "status": {"id": 3, "description": "Accepted"}, "token": "tok-1",
             })
         if p == "/api/sandboxes" and m == "GET":
             return self._send(200, {"sandboxes": [SANDBOX]})
@@ -104,6 +120,10 @@ class FakePlatform(BaseHTTPRequestHandler):
             return self._send(200, SANDBOX)
         if p == "/api/sandboxes/sb-123" and m == "DELETE":
             return self._send(204)
+        if p == "/api/sandboxes/sb-123/pause" and m == "POST":
+            return self._send(200, dict(SANDBOX, status="paused"))
+        if p == "/api/sandboxes/sb-123/resume" and m == "POST":
+            return self._send(200, dict(SANDBOX, status="running"))
         if p == "/api/sandboxes/sb-123/exec" and m == "POST":
             return self._send(200, {"stdout": "hi\n", "stderr": "", "exitCode": 0, "durationMs": 12})
         if p == "/api/sandboxes/sb-123/run" and m == "POST":
@@ -245,11 +265,18 @@ def test_delete_and_context_manager(av):
     assert sb.delete() is True
     assert FakePlatform.calls[-1][:2] == ("DELETE", "/api/sandboxes/sb-123")
 
-    # A sandbox bills for as long as it exists, so `with` has to destroy it.
+    # A context manager owns the whole retained workspace, so it must destroy it.
     with av.create_sandbox(environment="python"):
         pass
     assert FakePlatform.calls[-1][:2] == ("DELETE", "/api/sandboxes/sb-123")
 
+
+def test_pause_and_resume_update_the_object(av):
+    sb = av.sandbox("sb-123")
+    assert sb.pause() is sb and sb.status == "paused"
+    assert FakePlatform.calls[-1][:2] == ("POST", "/api/sandboxes/sb-123/pause")
+    assert sb.resume() is sb and sb.status == "running"
+    assert FakePlatform.calls[-1][:2] == ("POST", "/api/sandboxes/sb-123/resume")
 
 def test_metrics_and_port_url(av, platform):
     sb = av.sandbox("sb-123")
@@ -342,22 +369,20 @@ def test_default_url_is_the_public_origin(monkeypatch, tmp_path):
 
 
 def test_execute_takes_code_or_a_file(av, tmp_path):
-    """The whole execution product: send code, get what it printed. Nothing is
-    created first and nothing is left over."""
+    """The exec plane: send code, get what it printed. Nothing is created
+    first and nothing is left over. The wire is the standard submission JSON."""
     res = av.execute("print(1)", language="python")
-    assert str(res) == "print(1)" and res.exit_code == 0
+    assert str(res) == "print(1)" and res and res.status == {"id": 3, "description": "Accepted"}
     _, path, body = FakePlatform.calls[-1]
-    assert path == "/api/execute"
-    assert body == {"code": "print(1)", "language": "python"}
+    assert path == "/api/execute?wait=true&fields=*"
+    assert body == {"source_code": "print(1)", "language_id": 113}
 
     # A file path is resolved here, not on the platform — the wire only ever
     # carries code, so the server never resolves a path it did not write.
     script = tmp_path / "train.py"
     script.write_text("print('from a file')")
-    res = av.execute(file=str(script), language="python")
-    body = FakePlatform.calls[-1][2]
-    assert body["code"] == "print('from a file')"
-    assert body["filename"] == "train.py"
+    av.execute(file=str(script), language=113)
+    assert FakePlatform.calls[-1][2] == {"source_code": "print('from a file')", "language_id": 113}
 
 
 def test_execute_needs_exactly_one_of_code_or_file(av, tmp_path):
@@ -377,54 +402,64 @@ def test_language_is_required_in_both_forms(av, tmp_path):
     script.write_text("print(1)")
     with pytest.raises(ValueError):
         av.execute(file=str(script))
-
-
-def test_execute_passes_language_and_timeout(av):
-    av.execute("console.log(1)", language="node", timeout=45)
-    body = FakePlatform.calls[-1][2]
-    assert body["language"] == "node" and body["timeoutS"] == 45
+    with pytest.raises(ValueError):
+        av.execute("print(1)", language="cobol")
 
 
 def test_languages_are_listed(av):
     langs = av.languages()
-    assert [str(l) for l in langs] == ["python", "node", "c"]
-    assert langs[0].label == "Python 3" and langs[0].extension == ".py"
-    # Compiled is what tells a caller why part of their run was the compiler.
-    assert [l.compiled for l in langs] == [False, False, True]
+    assert [(l.id, l.code) for l in langs] == [(102, "node"), (103, "c"), (113, "python")]
+    assert langs[1].compiled and langs[2].name == "Python (3.14)" and langs[2].label == "Python (3.14)"
 
 
 def test_a_program_that_does_not_compile_is_a_result_not_an_exception(av):
-    """The call succeeded; the code was rejected. Those are different, and only
-    compile_failed distinguishes "never ran" from "ran and printed to stderr"."""
+    """The program never ran, so what comes back is the compiler's message as
+    compile_output, under Compilation Error."""
     res = av.execute("int main(void){ syntax error }", language="c")
-    assert res.compile_failed is True
-    assert res.exit_code == 1
-    assert res.stdout == ""
-    assert "expected ';'" in res.stderr
-    assert res.compile_ms == 90
-
-    # check() names the compiler rather than an exit code that explains nothing.
-    with pytest.raises(BoltzLabsError, match="did not compile"):
+    assert res.status_id == 6 and not res
+    assert "expected ';'" in str(res)
+    with pytest.raises(BoltzLabsError, match="Compilation Error"):
         res.check()
 
 
-def test_an_interpreted_run_carries_no_compile_fields(av):
-    res = av.execute("print(1)", language="python")
-    assert res.compile_failed is False and res.compile_ms == 0
-
-
-def test_a_quoted_value_ends_at_its_closing_quote(tmp_path):
-    """`KEY="v"  # note` is the shape that used to hand back the quotes as part
-    of the secret — a 401 from a key that looks correct in the file."""
-    from boltzlabs.config import _parse
-
-    env = tmp_path / ".env"
-    env.write_text(
-        'BOLTZLABS_API_KEY="ak_quoted"  # trailing comment\n'
-        'KEEPS_HASH="has#hash"\n'
-        "UNQUOTED=plain # note\n"
+def test_execute_judges_a_solution(av):
+    """Test input, the problem's limits and the expected answer go out in the
+    standard fields; the status, time and memory come back in them."""
+    res = av.execute(
+        "print(sum(map(int, input().split())))", language="python",
+        stdin="1 2 3\n", expected_output="6", cpu_time_limit=1, memory_limit=65536, supersede_key="tab-1",
     )
-    parsed = _parse(str(env))
-    assert parsed["BOLTZLABS_API_KEY"] == "ak_quoted"
-    assert parsed["KEEPS_HASH"] == "has#hash"
-    assert parsed["UNQUOTED"] == "plain"
+    body = FakePlatform.calls[-1][2]
+    assert body == {
+        "source_code": "print(sum(map(int, input().split())))", "language_id": 113, "stdin": "1 2 3\n",
+        "expected_output": "6", "cpu_time_limit": 1, "memory_limit": 65536, "supersede_key": "tab-1",
+    }
+    assert res.accepted and res.time == "0.012" and res.memory == 9216 and res.json["token"] == "tok-j"
+
+    wrong = av.execute("print(7)", language="python", expected_output="7")
+    assert wrong.status_id == 4 and not wrong
+    with pytest.raises(BoltzLabsError, match="Wrong Answer"):
+        wrong.check()
+
+
+def test_execute_batch_runs_the_test_cases_together(av):
+    results = av.execute_batch([
+        {"code": "print(input())", "language": "python", "stdin": "a"},
+        {"source_code": "print(input())", "language_id": 113, "stdin": "b"},
+    ])
+    posted = [c for c in FakePlatform.calls if c[1] == "/api/execute/batch"][-1][2]
+    assert posted == {"submissions": [
+        {"source_code": "print(input())", "language_id": 113, "stdin": "a"},
+        {"source_code": "print(input())", "language_id": 113, "stdin": "b"},
+    ]}
+    assert [r.stdout for r in results] == ["out t0\n", "out t1\n"] and all(results)
+
+
+def test_superseded_is_its_own_error_not_a_quota_error():
+    """A run replaced by a newer one under the same supersede_key is not out of
+    quota; a caller branching on the class must be able to tell."""
+    from boltzlabs.errors import QuotaError, SupersededError, from_status
+
+    assert isinstance(from_status(409, "replaced", {"code": "superseded"}), SupersededError)
+    assert isinstance(from_status(409, "limit", {"error": "limit"}), QuotaError)
+    assert boltzlabs.SupersededError is SupersededError

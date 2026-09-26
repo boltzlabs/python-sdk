@@ -1,4 +1,4 @@
-"""`bzlabs connect`, as Python — against a stand-in terminal endpoint.
+"""`boltz connect`, as Python — against a stand-in terminal endpoint.
 
 The fake behaves the way the real one does: raw bytes in, raw bytes out, and the
 server closes when the shell exits. What is under test is the bridging — that

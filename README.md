@@ -15,13 +15,13 @@ uv add git+https://github.com/boltzlabs/python-sdk.git
 ```python
 from boltzlabs import Sandbox
 
-sb = Sandbox()                            # small / base / internet off
+sandbox = Sandbox.create(environment="python")
 
-print(sb.run("print(sum(range(101)))"))   # code      → 5050
-print(sb.exec("pip install requests"))    # shell
-sb.terminal()                             # interactive shell
+print(sandbox.run("print(sum(range(101)))"))   # code      → 5050
+print(sandbox.exec("pip install requests"))    # shell
+sandbox.terminal()                             # interactive shell
 
-sb.delete()                               # stops the meter
+sandbox.delete()                               # stops the meter
 ```
 
 
@@ -42,16 +42,16 @@ point elsewhere, or call `boltzlabs.use(api_key=..., url=...)` once at startup.
 
 ## Sandboxes
 
-`Sandbox()` creates one. Every argument is a keyword with a default, so you name
+`Sandbox.create()` creates one. Every argument is a keyword with a default, so you name
 only what you are changing and the call says what each value means:
 
 ```python
-sb = Sandbox()                          # small / base
-sb = Sandbox(environment="python")      # what it ships with
-sb = Sandbox(machine="medium", environment="pytorch", name="trainer")
+sandbox = Sandbox.create()                          # small / base
+sandbox = Sandbox.create(environment="python")      # what it ships with
+sandbox = Sandbox.create(machine="medium", environment="node", name="builder")
 
-Sandbox(
-    machine="small",       # nano | small | medium | large
+Sandbox.create(
+    machine="small",       # small | medium | large
     environment="base",    # runtime or coding-agent image
     name=None,             # defaults to the id the platform assigns
     internet=False,
@@ -66,19 +66,19 @@ constructor argument — reach an existing sandbox with `boltzlabs.sandbox(id)`.
 Three verbs:
 
 ```python
-sb.run("print(1)")        # a snippet — the language follows the environment
-sb.exec("ls -la")         # a shell command
-sb.terminal()             # an interactive shell; sb.terminal("cmd") for a transcript
+sandbox.run("print(1)")        # a snippet — the language follows the environment
+sandbox.exec("ls -la")         # a shell command
+sandbox.terminal()             # an interactive shell; sandbox.terminal("cmd") for a transcript
 ```
 
 Both `run` and `exec` return the same result. `print()` it and you get the
 output; test it and you get success:
 
 ```python
-print(sb.exec("ls"))                 # prints stdout
-if sb.exec("test -f /app/x"):        # True when the exit code was 0
+print(sandbox.exec("ls"))                 # prints stdout
+if sandbox.exec("test -f /app/x"):        # True when the exit code was 0
     ...
-sb.exec("make").check()              # raises if it failed
+sandbox.exec("make").check()              # raises if it failed
 ```
 
 `.stdout`, `.stderr`, `.exit_code` and `.duration_ms` are there when you want
@@ -90,8 +90,8 @@ including when the body raises — the case that otherwise leaves a machine
 billing until someone notices:
 
 ```python
-with Sandbox() as sb:
-    print(sb.run("print(sum(range(101)))"))
+with Sandbox.create() as sandbox:
+    print(sandbox.run("print(sum(range(101)))"))
 # destroyed here, however the block ended
 ```
 
@@ -107,27 +107,41 @@ boltzlabs.execute(file="main.go", language="go")   # compiled, then run
 boltzlabs.languages()     # python, node, go, c, cpp — from the platform
 ```
 
-`go`, `c` and `cpp` are built before they run. Same call, and the same result
-object; what changes is that `res.compile_ms` says how much of the time was the
-compiler, and code that does not compile comes back with `res.compile_failed`
-set and the compiler's message in `res.stderr` — a result, not an exception,
-because the call worked and your code was rejected.
+The result is the standard submission format: `str(res)` is what it printed,
+`bool(res)` is whether it was Accepted, and `res.status`, `res.time` (CPU
+seconds), `res.wall_time`, `res.memory` (KB), `res.stdout`, `res.stderr`,
+`res.compile_output` and `res.json` (the whole response) are there when you want
+them. `go`, `c` and `cpp` are built first; code that does not compile comes back
+with status Compilation Error and the compiler's message in
+`res.compile_output` — a result, not an exception.
+
+Judging a solution — test input, the problem's limits (seconds, and KB for
+memory) and the expected answer — and running a problem's test cases together:
+
+```python
+res = boltzlabs.execute(file="sol.py", language="python", stdin="1 2\n",
+                        expected_output="3", cpu_time_limit=1, memory_limit=65536)
+res.status["description"]        # Accepted, Wrong Answer, Time Limit Exceeded, ...
+
+results = boltzlabs.execute_batch([{"code": src, "language": 113, "stdin": i, "expected_output": o}
+                                   for i, o in tests])   # up to 20, in parallel
+```
 
 The rest, when you need it:
 
 ```python
 import boltzlabs
 
-boltzlabs.me()            # who your key belongs to      (bzlabs auth status)
-boltzlabs.sandboxes()     # everything you have running  (bzlabs ls)
-boltzlabs.sandbox(id)     # one of them, by id           (bzlabs status <id>)
-boltzlabs.environments()  # runtime and coding-agent images  (bzlabs environments)
-boltzlabs.machines()      # machines and prices          (bzlabs machines)
-boltzlabs.languages()     # language codes for execute   (bzlabs languages)
+boltzlabs.me()            # who your key belongs to      (boltz auth status)
+boltzlabs.sandboxes()     # everything you have running  (boltz ls)
+boltzlabs.sandbox(id)     # one of them, by id           (boltz status <id>)
+boltzlabs.environments()  # runtime and coding-agent images  (boltz environments)
+boltzlabs.machines()      # machines and prices          (boltz machines)
+boltzlabs.languages()     # language codes for execute   (boltz languages)
 
-sb.url(8080)           # public URL for a port inside the sandbox
-sb.metrics()           # recorded cpu/memory samples
-sb.delete()            # destroy it                    (bzlabs rm)
+sandbox.url(8080)           # public URL for a port inside the sandbox
+sandbox.metrics()           # recorded cpu/memory samples
+sandbox.delete()            # destroy it                    (boltz rm)
 ```
 
 `Client` is underneath all of it and you rarely need to name it — reach for it
@@ -136,12 +150,12 @@ to hold two keys in one process, or for API-key management (`av.keys()`,
 
 ### Terminal
 
-`sb.terminal()` is `bzlabs connect`: a real PTY over a WebSocket, with the
+`sandbox.terminal()` is `boltz connect`: a real PTY over a WebSocket, with the
 remote shell owning echo, arrow keys, tab completion and ^C. Your terminal goes
 into raw mode and is restored on every exit path, including an exception — a
 missed restore leaves a shell that looks broken.
 
-`sb.terminal("tty; whoami")` runs a script through that same PTY and returns the
+`sandbox.terminal("tty; whoami")` runs a script through that same PTY and returns the
 transcript, for commands that only behave correctly with a terminal attached.
 
 The WebSocket client is written here rather than pulled in as a dependency (one

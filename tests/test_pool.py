@@ -46,6 +46,7 @@ def env_dir(tmp_path):
 
 def make_pool(worker, env_dir, n=8, **kw):
     kw.setdefault("worker_token", worker["token"])
+    kw.setdefault("mode", "boltz")
     return RLPool(env_dir=env_dir, n=n, direct=worker["url"], **kw)
 
 

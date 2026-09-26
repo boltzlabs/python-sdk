@@ -75,12 +75,16 @@ def worker(tmp_path_factory):
     profile = tmp / "sandy-run.json"
     profile.write_text(json.dumps({"mounts": []}))
 
+    settings = tmp / ".env"
+    settings.write_text("RL_MAX_ENVS=128\nRL_MEMORY_BUDGET_MB=65536\n")
+
     port = free_port()
     url = f"http://127.0.0.1:{port}"
     env = dict(os.environ)
     env.update(
         {
             "RL_BIND": f"127.0.0.1:{port}",
+            "RL_ENV_FILE": str(settings),
             "RL_ROOT": str(tmp / "root"),
             "RL_WORKER_TOKEN": TOKEN,
             "SANDY_BIN": STUB,

@@ -18,6 +18,7 @@ __all__ = [
     "CapacityError",
     "PoolGoneError",
     "PayloadTooLargeError",
+    "SupersededError",
 ]
 
 
@@ -66,8 +67,16 @@ class PayloadTooLargeError(APIError):
     """413 — the uploaded environment directory is over the limit."""
 
 
+class SupersededError(APIError):
+    """409 with code "superseded" — a newer execute() with the same
+    ``supersede_key`` replaced this one. Not a failure: the newer run is the
+    one whose result matters. Nothing was billed for this one."""
+
+
 def from_status(status, message, body=None):
     """Map an HTTP status onto the class a caller would branch on."""
+    if status == 409 and isinstance(body, dict) and body.get("code") == "superseded":
+        return SupersededError(status, message, body)
     cls = {
         401: AuthError,
         403: AuthError,
