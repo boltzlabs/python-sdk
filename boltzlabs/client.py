@@ -602,7 +602,7 @@ class Client:
         path = "/api/execute?wait=true&fields=*" if wait else "/api/execute"
         return Submission(self._post(path, body, timeout=180))
 
-    def execute_batch(self, submissions, *, wait=True, poll_interval=0.25, timeout=300.0):
+    def execute_batch(self, submissions, *, wait=True, poll_interval=0.25, timeout=1260.0):
         """Run up to 20 submissions at once — the test cases of one problem,
         say. Each is a dict of :meth:`execute`'s keywords (``code`` or
         ``source_code``, ``language``, ``stdin``, ``expected_output``, limits).

@@ -127,6 +127,7 @@ results = boltzlabs.execute_batch([{"code": src, "language": 113, "stdin": i, "e
 ```
 
 Batch submission is available to paid users. Each batch entry counts as one execution.
+Batch waits default to 21 minutes to allow workers to start; set `timeout` in seconds to override.
 
 The rest, when you need it:
 
