@@ -27,7 +27,7 @@ import numpy as np
 
 from . import _pack, config
 from ._http import Session
-from .errors import BoltzLabsError
+from .errors import BoltzLabsError, TransportError, from_status
 
 __all__ = ["RLPool", "Timing"]
 
@@ -214,10 +214,40 @@ class RLPool:
         if measure_cpu is not None:
             body["measure_cpu"] = int(measure_cpu)
 
-        # Creating a thousand sandboxes legitimately takes minutes — a thousand
-        # interpreter startups, staggered. This is the one call with a long
-        # deadline; every call after it is on the training loop's clock.
-        created, _ = self._session.call("POST", self._prefix, body, timeout=create_timeout)
+        deadline = time.monotonic() + create_timeout
+        path = self._prefix + "?wait=false" if self.via == "platform" else self._prefix
+        created, _ = self._session.call("POST", path, body,
+                                       timeout=min(60, create_timeout) if self.via == "platform" else create_timeout)
+        pending_id = created.get("pool_id")
+        pending = created.get("status") == "creating"
+        try:
+            while created.get("status") == "creating":
+                if not pending_id:
+                    raise BoltzLabsError("pool creation returned no pool id")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TransportError(f"pool {pending_id} creation timed out")
+                time.sleep(min(1, remaining))
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TransportError(f"pool {pending_id} creation timed out")
+                created, _ = self._session.call("GET", f"{self._prefix}/{pending_id}?creation=true",
+                                               timeout=min(60, remaining))
+            if created.get("status") == "failed":
+                raise from_status(created.get("error_status") or 500,
+                                  created.get("error") or "pool creation failed", created)
+            if created.get("status") and created["status"] != "running":
+                raise BoltzLabsError("pool creation was cancelled")
+            if pending and created.get("status") != "running":
+                raise BoltzLabsError("invalid pool creation response")
+        except Exception:
+            if pending_id:
+                try:
+                    self._session.call("DELETE", f"{self._prefix}/{pending_id}", timeout=15)
+                except Exception:
+                    pass  # The pool remains addressable if the network is down.
+            self._session.close()
+            raise
 
         self.pool_id = created["pool_id"]
         self.n = int(created.get("n", n))

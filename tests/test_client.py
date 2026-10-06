@@ -124,10 +124,10 @@ class FakePlatform(BaseHTTPRequestHandler):
             return self._send(200, dict(SANDBOX, status="paused"))
         if p == "/api/sandboxes/sb-123/resume" and m == "POST":
             return self._send(200, dict(SANDBOX, status="running"))
+        if p == "/api/sandboxes/sb-123/fork" and m == "POST":
+            return self._send(201, dict(SANDBOX, id="sb-456", name=body.get("name") or "sb-456", forkedFrom="sb-123"))
         if p == "/api/sandboxes/sb-123/exec" and m == "POST":
             return self._send(200, {"stdout": "hi\n", "stderr": "", "exitCode": 0, "durationMs": 12})
-        if p == "/api/sandboxes/sb-123/run" and m == "POST":
-            return self._send(200, {"stdout": body["code"], "exitCode": 0, "durationMs": 3})
         if p == "/api/sandboxes/sb-123/metrics" and m == "GET":
             return self._send(200, {"metrics": [{"cpu": 0.1}]})
         if p == "/api/sandboxes/sb-fail" and m == "GET":
@@ -223,23 +223,13 @@ def test_create_is_all_keywords_with_documented_defaults(av):
     assert body == {"machine": "small", "environment": "base"}
 
 
-def test_exec_and_run(av):
+def test_exec(av):
     sb = av.sandbox("sb-123")
 
     res = sb.exec("echo hi")
     assert res.stdout == "hi\n" and res.exit_code == 0 and res.duration_ms == 12
     assert res  # truthy on success — `if sb.exec(...)` has to work
     assert str(res) == "hi\n"  # and printable, so print(sb.exec(...)) works
-
-    # The language follows the sandbox type, so the common call is one argument.
-    res = sb.run("print(1)")
-    assert res.stdout == "print(1)"
-    _, path, body = FakePlatform.calls[-1]
-    assert path == "/api/sandboxes/sb-123/run"
-    assert body == {"language": "python", "code": "print(1)"}
-
-    sb.run("console.log(1)", language="node")
-    assert FakePlatform.calls[-1][2]["language"] == "node"
 
 
 def test_timeout_uses_the_field_the_backend_reads(av):
@@ -277,6 +267,14 @@ def test_pause_and_resume_update_the_object(av):
     assert FakePlatform.calls[-1][:2] == ("POST", "/api/sandboxes/sb-123/pause")
     assert sb.resume() is sb and sb.status == "running"
     assert FakePlatform.calls[-1][:2] == ("POST", "/api/sandboxes/sb-123/resume")
+
+def test_fork_returns_a_new_sandbox_and_leaves_this_one(av):
+    sb = av.sandbox("sb-123")
+    fork = sb.fork(name="branch")
+    assert FakePlatform.calls[-1][:2] == ("POST", "/api/sandboxes/sb-123/fork")
+    assert fork is not sb and fork.id == "sb-456" and fork.name == "branch"
+    assert sb.id == "sb-123"
+
 
 def test_metrics_and_port_url(av, platform):
     sb = av.sandbox("sb-123")

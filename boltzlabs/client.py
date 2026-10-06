@@ -4,7 +4,6 @@
 
     sb = Sandbox()                            # small / base / internet off
 
-    print(sb.run("print(sum(range(101)))"))   # code
     print(sb.exec("pip install requests"))    # shell
     sb.terminal()                             # interactive
 
@@ -78,10 +77,6 @@ ENVIRONMENTS = (
 
 # The machines it offers, cheapest first.
 MACHINES = ("small", "medium", "large")
-
-# What `run` sends when the caller does not say. The environment is what the
-# sandbox ships with, so it already answers the question.
-_LANGUAGE_FOR = {"python": "python", "node": "node", "base": "bash"}
 
 
 class ExecResult:
@@ -301,10 +296,10 @@ class APIKey:
 
 
 class Sandbox:
-    """A Linux workspace with an explicit create/run/delete lifecycle.
+    """A Linux workspace with an explicit create/exec/delete lifecycle.
 
         sandbox = Sandbox.create(environment="python")
-        result = sandbox.run("print(1 + 1)")
+        result = sandbox.exec("python -c 'print(1 + 1)'")
         print(result)
         sandbox.delete()
 
@@ -364,7 +359,7 @@ class Sandbox:
         # the client-wide one.
         self._fill(self._client._post("/api/sandboxes", body, timeout=timeout))
 
-    # -- the three verbs -----------------------------------------------------
+    # -- the two verbs -------------------------------------------------------
 
     def exec(self, command, timeout=None):
         """Run one shell command. `boltz exec <id> <cmd…>`."""
@@ -373,15 +368,6 @@ class Sandbox:
             body["timeoutS"] = int(timeout)
         return ExecResult._from_wire(
             self._client._post(f"/api/sandboxes/{self.id}/exec", body, timeout=_wait(timeout))
-        )
-
-    def run(self, code, language=None, timeout=None):
-        """Run a snippet. The language follows the sandbox type unless you say."""
-        body = {"code": code, "language": language or _LANGUAGE_FOR.get(self.environment, "bash")}
-        if timeout:
-            body["timeoutS"] = int(timeout)
-        return ExecResult._from_wire(
-            self._client._post(f"/api/sandboxes/{self.id}/run", body, timeout=_wait(timeout))
         )
 
     def terminal(self, script=None, timeout=60.0, **kw):
@@ -436,6 +422,19 @@ class Sandbox:
         """
         self._fill(self._client._post(f"/api/sandboxes/{self.id}/resume", timeout=timeout))
         return self
+
+    def fork(self, name=None, timeout=600.0):
+        """A new sandbox that starts as a copy of this one. `boltz fork <id>`.
+
+        Files under /workspace are copied; running processes and packages
+        installed outside /workspace are not. This sandbox keeps running, held
+        still only for as long as its workspace takes to copy. The fork is a
+        sandbox like any other: it counts against your concurrent limit and
+        bills on its own clock until you pause or delete it.
+        """
+        body = {"name": name} if name else {}
+        wire = self._client._post(f"/api/sandboxes/{self.id}/fork", body, timeout=timeout)
+        return Sandbox._attach(wire, self._client)
 
     def delete(self):
         """Destroy it. `boltz rm <id>`."""
@@ -565,7 +564,7 @@ class Client:
         """Run one piece of code on the exec plane. `boltz run`.
 
         Either the code itself or a path to read it from, and always the
-        language — an id (113) or a code ("python")::
+        language — an id (100) or a code ("python")::
 
             boltzlabs.execute("print(sum(range(101)))", language="python")
             boltzlabs.execute(file="main.go", language="go")

@@ -4,7 +4,6 @@
 
     sb = Sandbox()                            # small / base / internet off
 
-    print(sb.run("print(sum(range(101)))"))   # code
     print(sb.exec("pip install requests"))    # shell
     sb.terminal()                             # interactive shell
 
@@ -108,7 +107,7 @@ def execute(code=None, **kw):
     """Run one piece of code on the exec plane. `boltz run`.
 
         boltzlabs.execute("print(sum(range(101)))", language="python")
-        boltzlabs.execute(file="sol.py", language=113, stdin="21", expected_output="42")
+        boltzlabs.execute(file="sol.py", language=100, stdin="21", expected_output="42")
 
     The language is always named — an id or a code; see ``boltzlabs.languages()``.
     Returns a :class:`Submission`; see :meth:`Client.execute` for every option.

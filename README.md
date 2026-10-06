@@ -17,8 +17,8 @@ from boltzlabs import Sandbox
 
 sandbox = Sandbox.create(environment="python")
 
-print(sandbox.run("print(sum(range(101)))"))   # code      → 5050
-print(sandbox.exec("pip install requests"))    # shell
+print(sandbox.exec("python -c 'print(sum(range(101)))'"))   # → 5050
+print(sandbox.exec("pip install requests"))
 sandbox.terminal()                             # interactive shell
 
 sandbox.delete()                               # stops the meter
@@ -63,16 +63,15 @@ Sandbox.create(
 An id is assigned by the platform, never chosen by the caller, so it is not a
 constructor argument — reach an existing sandbox with `boltzlabs.sandbox(id)`.
 
-Three verbs:
+Two verbs:
 
 ```python
-sandbox.run("print(1)")        # a snippet — the language follows the environment
 sandbox.exec("ls -la")         # a shell command
 sandbox.terminal()             # an interactive shell; sandbox.terminal("cmd") for a transcript
 ```
 
-Both `run` and `exec` return the same result. `print()` it and you get the
-output; test it and you get success:
+`exec` returns a result. `print()` it and you get the output; test it and you
+get success:
 
 ```python
 print(sandbox.exec("ls"))                 # prints stdout
@@ -91,7 +90,7 @@ billing until someone notices:
 
 ```python
 with Sandbox.create() as sandbox:
-    print(sandbox.run("print(sum(range(101)))"))
+    print(sandbox.exec("python -c 'print(sum(range(101)))'"))
 # destroyed here, however the block ended
 ```
 
@@ -126,6 +125,8 @@ res.status["description"]        # Accepted, Wrong Answer, Time Limit Exceeded, 
 results = boltzlabs.execute_batch([{"code": src, "language": 113, "stdin": i, "expected_output": o}
                                    for i, o in tests])   # up to 20, in parallel
 ```
+
+Batch submission is available to paid users. Each batch entry counts as one execution.
 
 The rest, when you need it:
 
@@ -167,6 +168,22 @@ so "it framed something" is not mistaken for "it interoperates".
 ```
 examples/sandbox_tour.py  every CLI command, done from Python
 ```
+
+## RL pool startup
+
+`RLPool(environment="cartpole", n=4)` starts creation and polls the saved pool
+until it is ready. Each public HTTP request has a timeout of at most 60 seconds;
+`create_timeout` bounds the complete startup (900 seconds by default). Startup
+errors keep the API's status and message. If polling fails or times out, the SDK
+attempts cancellation. If cleanup cannot reach the server, find and delete the
+pool in your dashboard after reconnecting.
+
+HTTP clients use `POST /api/rl/pools?wait=false` (202), then poll the returned
+`Location` with the same API key once per second. Status is `creating`, `running`
+or `failed`; failures include `error` and `error_status`. `DELETE` cancels pending
+startup. Pending pools reserve quota and expire after 15 minutes, including
+when a control-plane restart interrupts startup. The original synchronous POST
+remains available for older clients; internal worker calls are unchanged.
 
 ## Development
 

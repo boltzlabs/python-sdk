@@ -41,9 +41,6 @@ def main():
         print("\nexec")
         print("  " + str(sb.exec("uname -a && python3 -V")).strip().replace("\n", "\n  "))
 
-        print("\nrun")
-        print("  " + str(sb.run("print(sum(range(101)))")).strip())
-
         print("\nterminal (a real PTY, like `boltz connect`)")
         print("  " + sb.terminal("tty; echo from-a-real-tty").strip().replace("\n", "\n  ")[:400])
 
